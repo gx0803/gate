@@ -21,7 +21,7 @@ on:
         default: '25'
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
   actions: write
@@ -145,3 +145,34 @@ jobs:
         run: |
           echo "订阅地址：https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/nodes.txt"
           echo "仪表盘：  https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
+
+      # GitHub 在公开仓库 60 天无提交后会自动禁用所有 schedule 工作流。
+      # 每 12 小时运行时检查：距最近一次提交 >= 50 天则推一个空提交到独立分支，
+      # 刷新仓库活跃度，避免定时任务被自动停用。[skip ci] 防止触发 CI 工作流。
+      - name: Keep repo active
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # 查仓库级 pushed_at（涵盖所有分支），而不是当前 checkout 的 HEAD，
+          # 这样保活提交推到 keepalive 分支后也能正确重置计时。
+          pushed=$(curl -sS \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}" | jq -r '.pushed_at')
+          last=$(date -d "$pushed" +%s)
+          now=$(date +%s)
+          days=$(( (now - last) / 86400 ))
+          echo "最近一次仓库 push 距今 ${days} 天"
+          if [ "$days" -lt 50 ]; then
+            echo "未达 50 天阈值，跳过保活提交"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -q --orphan keepalive
+          git rm -rqf . || true
+          git commit -q --allow-empty -m "chore: keepalive [skip ci] $(date -u +%Y-%m-%d)"
+          git push -q --force "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" keepalive
+          echo "已推送保活提交到 keepalive 分支"
