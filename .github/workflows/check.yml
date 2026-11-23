@@ -27,6 +27,7 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  actions: write
 
 concurrency:
   group: gate-check
@@ -113,6 +114,26 @@ jobs:
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
+
+      # Re-run 会在同一个 run 内重复上传 github-pages artifact，
+      # deploy-pages 要求同名 artifact 唯一，故每次部署前先清理旧产物。
+      - name: Clean stale github-pages artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100"
+          ids=$(curl -sS \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "${api}" | jq -r '.artifacts[] | select(.name == "github-pages") | .id')
+          for id in $ids; do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}")
+            echo "DELETE artifact ${id} -> ${code}"
+          done
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
